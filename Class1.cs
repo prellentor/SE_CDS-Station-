@@ -924,10 +924,11 @@ namespace CDS
             {
                 // Names writen in names table
                 destinationNames = ReadDestinationNames();
+
                 if (destinationNames.Count < 2)
                 {
                     processingLog.Append(" - There is no known destinations\n");
-                    return 1;
+                    return 2;
                 }
 
                 if (!IsDestionNamesContain(destination))
@@ -941,13 +942,16 @@ namespace CDS
                 table = RebuildRouteTable(table, destination.ToUpper());
                 int[,] matrix = BuildMatrix(table, destinationNames.Count);
                 ShowMatrix(matrix);
+
                 // find destination next node
                 int destinationNameNumber = DijkstraPathFind(matrix, 0, destinationNames.Count);
                 if (destinationNameNumber == -1)
                     return 1;
+
                 // get route out from bay
                 string routeData = "";
                 routeData += GetInnerRoute(drone.getBayNumber(), 0);
+
                 // get route to current destination
                 IMyTextPanel panelWithRouteData = FindRouteToDataPanel(destinationNames[destinationNameNumber]);
 
@@ -1012,6 +1016,13 @@ namespace CDS
                 return 0;
             }
 
+            private void NewPrivilegedCommand(string[] command)
+            {
+                if (commands.Count > 0)
+                    commands.Insert(0, command);
+                commands.Add(command);
+            }
+
             private int DroneHandling(bool show)
             {
                 // get drone that arrived to hub
@@ -1032,23 +1043,32 @@ namespace CDS
                     {
                         UnloadCargo();
                         if (statusWords[2].ToUpper() == "STANDBY" && bayConnectors.Count > 1)
-                            SendDroneToEmptyBay();
+                            commands.Add(new string[] { "PARK" });
+                        
                         if (statusWords[2].ToUpper() == "DELIVER")
                         {
                             SendToDestination(statusWords[0].ToUpper(), false, false);
                             if (show)
-                                processingLog.Append(" - Transport was sended back to:\n - <" + statusWords[0].ToUpper() + ">\n");
+                                processingLog.Append(" - Transport was sended back to:\n - " + statusWords[0].ToUpper() + "\n");
                         }
                     }
 
                     if (statusWords[1].ToUpper() != myName.ToUpper() && statusWords[1].ToUpper() != "NULL")
                     {
+                        // idk this destination, send him back
+                        if (!IsDestionNamesContain(statusWords[1]))
+                        {
+                            processingLog.Append(" - Destination:\n - " + statusWords[1] + " : unknown.\n");
+                            processingLog.Append(" - Transport will be sended back to:\n - " + statusWords[0].ToUpper() + "\n");
+                            NewPrivilegedCommand(new string[] { "SENDBACK", statusWords[0].ToUpper() });
+                            return 1;
+                        }
                         if (show)
                             processingLog.Append(" - Transit to " + statusWords[1].ToUpper() + "\n");
                         if (statusWords[2].ToUpper() == "STANDBY")
-                            SendToDestination(statusWords[1].ToUpper(), true, false);
+                            NewPrivilegedCommand(new string[] { "ROUTE", statusWords[0].ToUpper(), "TRANSIT" });
                         if (statusWords[2].ToUpper() == "DELIVER")
-                            SendToDestination(statusWords[1].ToUpper(), true, true);
+                            NewPrivilegedCommand(new string[] { "ROUTE", statusWords[0].ToUpper(), "DELIVER" });
                     }
                 }
                 return 0;
@@ -1200,21 +1220,25 @@ namespace CDS
                     if (command == "DOCKING_ROUTES" || command == "DR")
                         SetupDockingBays();
                 }
+                if (command == "PARK")
+                {
+                    SendDroneToEmptyBay();
+                }
 
                 //more that one argument commands
                 try
                 {
-                    if (command == "SENDTO" || command == "DELIVERTO")
+                    if (command == "SENDTO" || command == "DELIVERTO") // work all possible bays
                     {
                         if (words[1] != "" && words[1].ToUpper() != myName.ToUpper())
                         {
                             if (bayConnectors.Count > 1)
                                 for (int i = 1; i < bayConnectors.Count - 1; i++)
                                     drone.TryGetFromBay(i, bayConnectors[i]);
-                            //TODO. must be separeted in different runs as progress bar.
+                            //TODO. can be separeted in different runs as progress bar. 
+                            //because search can take a while 
                             else
                                 drone.TryGetFromBay(0, bayConnectors[0]);
-                            //TODO. must be separeted in different runs as progress bar.
 
                             if (drone.Check())
                             {
@@ -1223,8 +1247,24 @@ namespace CDS
                                 else
                                     SendToDestination(words[1], false, true);
                             }
-                            else processingLog.Append(" - There is no drones to send to\n = (" + words[1] + ")\n");
+                            else processingLog.Append(" - There is no drones to send to:\n" + words[1] + "\n");
                         }
+                    }
+                    if (command == "ROUTE") // this command work with hub bay only
+                    {
+                        drone.TryGetFromBay(0, bayConnectors[0]);
+                        if (drone.Check()) {
+                            bool deliver = (words[2] == "DELIVER") ? true : false;
+                            SendToDestination(words[1], true, deliver);
+                        }
+                        else processingLog.Append(" - Error in send back command:\n" + words[1] + "\n");
+                    }
+                    if (command == "SENDBACK") // this command work with hub bay only
+                    {
+                        drone.TryGetFromBay(0, bayConnectors[0]);
+                        if (drone.Check())
+                            SendToDestination(words[1], false, false);
+                        else processingLog.Append(" - Error in send back command:\n" + words[1] + "\n");
                     }
                     if (command == "REVERSE")
                     {
@@ -1240,7 +1280,7 @@ namespace CDS
                 }
                 catch (Exception e)
                 {
-                    processingLog.Append(" - Command: " + words[0] + " - requires argument\n");
+                    processingLog.Append(" - " + command + "\nError!:\n " + e.ToString() + "\n");
                 }
                 commands.RemoveAt(0);
             }
